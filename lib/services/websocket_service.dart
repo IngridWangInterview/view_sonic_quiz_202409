@@ -5,52 +5,84 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+typedef UserStatusCallback = void Function(
+    int onlineUsers, int totalConnections);
+
 class User {
   final String name;
   bool isOnline;
+  List<String> messages;
 
-  User(this.name, {this.isOnline = true});
+  User(this.name, {this.isOnline = true, this.messages = const []});
+}
+
+enum VcMsgType {
+  connect,
+  message,
+  disconnect;
+
+  static VcMsgType fromJson(String type) {
+    return VcMsgType.values.firstWhere((e) => e.name == type);
+  }
+}
+
+class VcMsg {
+  final VcMsgType type;
+  final String name;
+  final String content;
+
+  VcMsg({required this.type, required this.name, required this.content});
+
+  factory VcMsg.fromJson(Map<String, dynamic> json) {
+    return VcMsg(
+        type: VcMsgType.fromJson(json['type']),
+        name: json['name'],
+        content: json['content']);
+  }
 }
 
 class WebSocketServer {
+  final String ip;
   final int port;
-  final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  final _messageController = StreamController<Map<String, User>>.broadcast();
   final _users = <String, User>{};
   int _totalConnections = 0;
 
-  WebSocketServer(this.port);
+  WebSocketServer(this.ip, this.port);
 
-  Stream<Map<String, dynamic>> get messages => _messageController.stream;
+  Stream<Map<String, User>> get messages => _messageController.stream;
 
   int get onlineUsers => _users.values.where((user) => user.isOnline).length;
+
   int get totalConnections => _totalConnections;
 
   Future<void> start() async {
     final handler = webSocketHandler((WebSocketChannel webSocket) {
       webSocket.stream.listen((message) {
+        print('------------message-----------, $message');
+
         final data = jsonDecode(message);
-        switch (data['type']) {
-          case 'connect':
-            _handleConnect(data['name']);
+        final msg = VcMsg.fromJson(data);
+        switch (msg.type) {
+          case VcMsgType.connect:
+            _handleConnect(msg.name);
             break;
-          case 'message':
-            _handleMessage(data['name'], data['content']);
+          case VcMsgType.message:
+            _handleMessage(msg);
             break;
-          case 'disconnect':
-            _handleDisconnect(data['name']);
+          case VcMsgType.disconnect:
+            _handleDisconnect(msg);
             break;
         }
       }, onDone: () {
-        // Handle unexpected disconnection
         _users.entries
             .firstWhere((entry) => entry.value.isOnline)
             .value
             .isOnline = false;
-        _notifyUserStatusChange();
       });
     });
 
-    final server = await shelf_io.serve(handler, 'localhost', port);
+    final server = await shelf_io.serve(handler, ip, port);
     print('Serving at ws://${server.address.host}:${server.port}');
   }
 
@@ -59,32 +91,35 @@ class WebSocketServer {
       _users[name]!.isOnline = true;
     } else {
       _users[name] = User(name);
-      _totalConnections++;
+      _totalConnections += 1;
     }
-    _notifyUserStatusChange();
+    final newUsers = Map.of(_users);
+    _messageController.add(newUsers);
   }
 
-  void _handleMessage(String name, String content) {
-    _messageController.add({
-      'type': 'message',
-      'name': name,
-      'content': content,
-    });
-  }
-
-  void _handleDisconnect(String name) {
-    if (_users.containsKey(name)) {
-      _users[name]!.isOnline = false;
-      _notifyUserStatusChange();
+  void _handleMessage(VcMsg msg) {
+    if (_users.containsKey(msg.name)) {
+      _users[msg.name]!.isOnline = true;
+    } else {
+      _users[msg.name] = User(msg.name);
+      _totalConnections += 1;
     }
+
+    if (_users[msg.name]!.messages.isEmpty) {
+      _users[msg.name]!.messages = [msg.content];
+    } else {
+      _users[msg.name]!.messages.add(msg.content);
+    }
+    final newUsers = Map.of(_users);
+    _messageController.add(newUsers);
   }
 
-  void _notifyUserStatusChange() {
-    _messageController.add({
-      'type': 'status',
-      'onlineUsers': onlineUsers,
-      'totalConnections': totalConnections,
-    });
+  void _handleDisconnect(VcMsg msg) {
+    if (_users.containsKey(msg.name)) {
+      _users[msg.name]!.isOnline = false;
+      final newUsers = Map.of(_users);
+      _messageController.add(newUsers);
+    }
   }
 
   void dispose() {

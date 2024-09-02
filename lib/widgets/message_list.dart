@@ -10,21 +10,33 @@ class MessageList extends HookConsumerWidget {
     final messages = ref.watch(messagesProvider);
 
     return ListView.builder(
-      itemCount: messages.length,
+      itemCount: messages.entries
+              .fold(0, (sum, entry) => sum + entry.value.messages.length) +
+          messages.length,
       itemBuilder: (context, index) {
-        final message = messages[index];
-        if (message['type'] == 'message') {
-          return ExpansionTile(
-            title: Text(message['name']),
-            subtitle: Text(message['content'],
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(message['content']),
-              ),
-            ],
-          );
+        int currentIndex = 0;
+        for (final entry in messages.entries) {
+          final header = entry.key;
+          final userMessages = entry.value.messages;
+          if (index == currentIndex) {
+            return Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(
+                  "$header ${entry.value.isOnline ? 'online' : 'offline'}",
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            );
+          }
+          currentIndex += 1;
+
+          for (final message in userMessages) {
+            if (index == currentIndex) {
+              return Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(message),
+              );
+            }
+            currentIndex += 1;
+          }
         }
         return const SizedBox.shrink();
       },
